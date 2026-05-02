@@ -24,7 +24,6 @@
     margin-top: 16px; padding: 10px 12px; background: #fff8f0;
     border-radius: 8px; font-size: 12px; color: #666; border: 1px solid #f0dcc8;
   }
-  .query-box strong { color: #c0622a; }
   .results { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
   .card {
     background: #fff; border-radius: 12px; padding: 14px;
@@ -32,10 +31,7 @@
   }
   .card-name { font-size: 16px; font-weight: bold; color: #2d1b00; margin-bottom: 8px; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-  .tag {
-    font-size: 11px; padding: 3px 8px; border-radius: 20px;
-    background: #f0dcc8; color: #8b4a1a;
-  }
+  .tag { font-size: 11px; padding: 3px 8px; border-radius: 20px; background: #f0dcc8; color: #8b4a1a; }
   .desc { font-size: 13px; color: #555; line-height: 1.6; }
   .empty { text-align: center; color: #999; margin-top: 32px; font-size: 14px; }
   .error { color: #c0392b; text-align: center; margin-top: 16px; font-size: 14px; }
@@ -52,7 +48,57 @@
 <div class="results" id="results"></div>
 
 <script>
-const ENDPOINT = "https://rjyziuqbscojhdlxrtcp.supabase.co/functions/v1/cultivar-search";
+// ※テスト用。本番ではバックエンドに移す
+const GEMINI_KEY = "AIzaSyC-ESraTKU5ARkpxuDmOXv5vcvsKV-apvM";
+const SEARCH_ENDPOINT = "https://rjyziuqbscojhdlxrtcp.supabase.co/functions/v1/cultivar-search";
+
+const SYSTEM_PROMPT = `あなたはいちじく品種データベースの検索クエリ生成AIです。
+ユーザーの質問を以下のJSON形式に変換してください。
+JSON以外は一切出力しないこと。マークダウン不要。
+
+{
+  "display_name": string | null,
+  "flavor_group": "Bordeaux" | "Honey" | "Adriatic" | "Dark Berry" | "Sugar" | "Exotic" | "Other" | null,
+  "cold_hardy": "Yes" | "No" | null,
+  "fruit_size": "Small" | "Small to medium" | "Medium" | "Medium to large" | "Large" | null,
+  "main_season": "Early" | "Mid" | "Late" | null,
+  "fig_type": "Common" | "Caprifig" | "San Pedro" | "Smyrna" | null,
+  "container_suitability": "Excellent" | "Average" | "Low" | null,
+  "rain_resistance": "Excellent" | "Average" | "Low" | null,
+  "easy_rooting": "Excellent" | "Average" | "Low" | "Difficult" | null,
+  "limit": number
+}
+
+変換ルール:
+- 言及されていない項目はnullにする
+- limitはデフォルト10
+- 「耐寒性」「寒さに強い」「冬に強い」→ cold_hardy: "Yes"
+- 「鉢向き」「コンテナ」→ container_suitability: "Excellent"
+- 「雨に強い」→ rain_resistance: "Excellent"
+- 「挿し木しやすい」→ easy_rooting: "Excellent"
+- 「甘い」「めちゃ甘い」「すごく甘い」「甘度高い」→ flavor_group: "Sugar"
+- 「ハチミツ」「ネクター」→ flavor_group: "Honey"
+- 「早生」「早い」→ main_season: "Early"
+- 「晩生」「遅い」→ main_season: "Late"`;
+
+async function parseWithGemini(userInput) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ parts: [{ text: userInput }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 256 }
+      })
+    }
+  );
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  return JSON.parse(cleaned);
+}
 
 async function search() {
   const input = document.getElementById("input").value.trim();
@@ -69,29 +115,35 @@ async function search() {
   results.innerHTML = "";
 
   try {
-    const res = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ natural_query: input })
-    });
+    // Step1: GeminiでJSONに変換
+    const query = await parseWithGemini(input);
+    console.log("Parsed query:", query);
 
-    const data = await res.json();
-alert(JSON.stringify(data.parsed_query));
-    if (data.error) {
-      status.textContent = "";
-      results.innerHTML = `<div class="error">エラー: ${data.error}</div>`;
-      return;
-    }
-
-    // 解析されたクエリを表示
-    const q = data.parsed_query;
-    const qParts = Object.entries(q)
+    // 解析クエリ表示
+    const qParts = Object.entries(query)
       .filter(([k, v]) => v !== null && k !== "limit")
       .map(([k, v]) => `<strong>${k}</strong>: ${v}`)
       .join("　");
     if (qParts) {
-      queryBox.innerHTML = `📋 解析されたクエリ: ${qParts}`;
+      queryBox.innerHTML = `📋 ${qParts}`;
       queryBox.style.display = "block";
+    }
+
+    status.textContent = "🔍 検索中...";
+
+    // Step2: Edge Functionに直接クエリを渡す
+    const res = await fetch(SEARCH_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(query)
+    });
+
+    const data = await res.json();
+
+    if (data.error) {
+      status.textContent = "";
+      results.innerHTML = `<div class="error">エラー: ${data.error}</div>`;
+      return;
     }
 
     status.textContent = `✅ ${data.count}件見つかりました`;
@@ -103,8 +155,10 @@ alert(JSON.stringify(data.parsed_query));
 
     results.innerHTML = data.results.map(c => {
       const tags = [
-        c.flavor_group, c.fig_type, c.cold_hardy === "Yes" ? "耐寒性あり" : null,
-        c.fruit_size, c.main_season, c.container_suitability === "Excellent" ? "鉢向き" : null
+        c.flavor_group, c.fig_type,
+        c.cold_hardy === "Yes" ? "耐寒性あり" : null,
+        c.fruit_size, c.main_season,
+        c.container_suitability === "Excellent" ? "鉢向き" : null
       ].filter(Boolean);
 
       return `
