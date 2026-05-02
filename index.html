@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>figcorpus AIエージェント テスト</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: sans-serif; background: #f5f0eb; min-height: 100vh; padding: 24px 16px; }
+  h1 { font-size: 18px; color: #2d1b00; margin-bottom: 4px; }
+  p { font-size: 13px; color: #888; margin-bottom: 20px; }
+  textarea {
+    width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px;
+    font-size: 15px; resize: none; height: 80px; background: #fff;
+  }
+  button {
+    width: 100%; margin-top: 10px; padding: 14px;
+    background: #c0622a; color: white; border: none; border-radius: 10px;
+    font-size: 16px; font-weight: bold; cursor: pointer;
+  }
+  button:disabled { background: #ccc; }
+  .status { margin-top: 12px; font-size: 13px; color: #888; text-align: center; }
+  .query-box {
+    margin-top: 16px; padding: 10px 12px; background: #fff8f0;
+    border-radius: 8px; font-size: 12px; color: #666; border: 1px solid #f0dcc8;
+  }
+  .query-box strong { color: #c0622a; }
+  .results { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .card {
+    background: #fff; border-radius: 12px; padding: 14px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  .card-name { font-size: 16px; font-weight: bold; color: #2d1b00; margin-bottom: 8px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .tag {
+    font-size: 11px; padding: 3px 8px; border-radius: 20px;
+    background: #f0dcc8; color: #8b4a1a;
+  }
+  .desc { font-size: 13px; color: #555; line-height: 1.6; }
+  .empty { text-align: center; color: #999; margin-top: 32px; font-size: 14px; }
+  .error { color: #c0392b; text-align: center; margin-top: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>🌿 figcorpus AIエージェント</h1>
+<p>自然言語で品種を検索できます</p>
+
+<textarea id="input" placeholder="例：耐寒性があって鉢で育てやすい早生品種教えて"></textarea>
+<button id="btn" onclick="search()">検索する</button>
+<div class="status" id="status"></div>
+<div class="query-box" id="queryBox" style="display:none"></div>
+<div class="results" id="results"></div>
+
+<script>
+const ENDPOINT = "https://rjyziuqbscojhdlxrtcp.supabase.co/functions/v1/cultivar-search";
+
+async function search() {
+  const input = document.getElementById("input").value.trim();
+  if (!input) return;
+
+  const btn = document.getElementById("btn");
+  const status = document.getElementById("status");
+  const queryBox = document.getElementById("queryBox");
+  const results = document.getElementById("results");
+
+  btn.disabled = true;
+  status.textContent = "🤖 AIが質問を解析中...";
+  queryBox.style.display = "none";
+  results.innerHTML = "";
+
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ natural_query: input })
+    });
+
+    const data = await res.json();
+
+    if (data.error) {
+      status.textContent = "";
+      results.innerHTML = `<div class="error">エラー: ${data.error}</div>`;
+      return;
+    }
+
+    // 解析されたクエリを表示
+    const q = data.parsed_query;
+    const qParts = Object.entries(q)
+      .filter(([k, v]) => v !== null && k !== "limit")
+      .map(([k, v]) => `<strong>${k}</strong>: ${v}`)
+      .join("　");
+    if (qParts) {
+      queryBox.innerHTML = `📋 解析されたクエリ: ${qParts}`;
+      queryBox.style.display = "block";
+    }
+
+    status.textContent = `✅ ${data.count}件見つかりました`;
+
+    if (data.count === 0) {
+      results.innerHTML = `<div class="empty">該当する品種が見つかりませんでした</div>`;
+      return;
+    }
+
+    results.innerHTML = data.results.map(c => {
+      const tags = [
+        c.flavor_group, c.fig_type, c.cold_hardy === "Yes" ? "耐寒性あり" : null,
+        c.fruit_size, c.main_season, c.container_suitability === "Excellent" ? "鉢向き" : null
+      ].filter(Boolean);
+
+      return `
+        <div class="card">
+          <div class="card-name">${c.display_name}</div>
+          <div class="tags">${tags.map(t => `<span class="tag">${t}</span>`).join("")}</div>
+          ${c.description ? `<div class="desc">${c.description.slice(0, 120)}${c.description.length > 120 ? "…" : ""}</div>` : ""}
+        </div>
+      `;
+    }).join("");
+
+  } catch (e) {
+    status.textContent = "";
+    results.innerHTML = `<div class="error">通信エラー: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); search(); }
+});
+</script>
+</body>
+</html>
