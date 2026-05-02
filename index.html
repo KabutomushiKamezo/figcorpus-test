@@ -76,7 +76,7 @@ async function search() {
     });
 
     const data = await res.json();
-
+alert(JSON.stringify(data.parsed_query));
     if (data.error) {
       status.textContent = "";
       results.innerHTML = `<div class="error">エラー: ${data.error}</div>`;
